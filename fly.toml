@@ -1,0 +1,44 @@
+# Rename `app` before the first deploy, or run `fly launch --copy-config`.
+app = "tg-digest-bot"
+primary_region = "ams"
+
+[build]
+
+[env]
+  DB_PATH = "/data/bot.db"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_start_machines = true
+
+  # The Machine sleeps whenever nothing is talking to it. Inbound traffic is a
+  # Telegram webhook (an admin tapping a button) or the /tick alarm twice a day,
+  # so it is awake for a few minutes a day and billed accordingly.
+  #
+  # "stop" rather than "suspend" on purpose: suspended Machines are known to
+  # come back with a desynchronised clock, and every scheduling decision here
+  # is made against the wall clock. A cold start costs 1-2 s and is always
+  # correct. Switch to "suspend" if you would rather have a snappier admin UI
+  # than a guaranteed-correct clock.
+  auto_stop_machines = "stop"
+  min_machines_running = 0
+
+  # No [[http_service.checks]] block on purpose: a health check is inbound
+  # traffic, and polling one would hold the Machine awake around the clock —
+  # exactly what auto-stop is here to avoid.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1
+
+[[mounts]]
+  source = "digest_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[deploy]
+  # One Machine owns the volume, so there is no second Machine to roll onto.
+  strategy = "immediate"
