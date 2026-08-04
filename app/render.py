@@ -83,6 +83,7 @@ def _chip_label(index: int) -> str:
         "\u246a", "\u246b", "\u246c", "\u246d", "\u246e",
         "\u246f", "\u2470", "\u2471", "\u2472", "\u2473",
     )
+    # Support for post indices beyond circled digits
     if 1 <= index <= len(circled):
         return circled[index - 1]
     return f"{index}\ufe0f\u20e3"
