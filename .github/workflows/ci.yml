@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Docker image runs 3.13; 3.11 is the declared floor.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: |
+          ruff check app tests
+          ruff format --check app tests
+
+      - name: Test
+        run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: tg-digest-bot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image starts and reports missing configuration
+        run: |
+          # No BOT_TOKEN: the entrypoint must fail fast with a clear message
+          # rather than crash-looping on Fly.
+          output=$(docker run --rm tg-digest-bot:ci 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "BOT_TOKEN is required"

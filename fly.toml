@@ -1,0 +1,33 @@
+# fly.toml app configuration file generated for tg-digest-bot-still-ocean-5762 on 2026-07-27T19:34:44+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'tg-digest-bot-still-ocean-5762'
+primary_region = 'ams'
+
+[build]
+[deploy]
+  strategy = 'immediate'
+
+[env]
+  DB_PATH = '/data/bot.db'
+  PORT = '8080'
+
+[[mounts]]
+  source = 'digest_data'
+  destination = '/data'
+  initial_size = '1gb'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpus = 1
+  memory_mb = 512

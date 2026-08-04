@@ -1,0 +1,28 @@
+[project]
+name = "tg-digest-bot"
+version = "1.0.0"
+description = "One-sentence Telegram channel digests, summarised via OpenRouter"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "DTZ", "ISC", "RUF", "FURB", "SIM"]
+ignore = [
+    "E501",    # long lines are user-facing Russian strings; wrapping hurts them more
+    "B008",    # aiogram filters are built in defaults by design
+    "RUF001",  # Cyrillic text legitimately contains lookalike characters
+    "RUF002",
+    "RUF003",
+    "SIM105",  # contextlib.suppress is not always clearer than try/except: pass
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
