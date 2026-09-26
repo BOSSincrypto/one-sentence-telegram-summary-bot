@@ -184,3 +184,19 @@ def test_midnight_schedule_rolls_a_full_day_forward():
     db.put("digest_time", "00:00")
     db.put(runner.LAST_DAY_KEY, "2026-07-26")
     assert runner.next_run_at(at(1, 0)) - at(0, 0) == timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_run_all_keeps_due_when_a_group_crashes(monkeypatch):
+    group_id = db.add_group("Группа")
+    db.update_group(group_id, chat_id=1)
+    db.put("digest_time", "00:00")
+    db.put(runner.LAST_DAY_KEY, "2000-01-01")
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "run_group", boom)
+    await runner.run_all(bot=None, session=None, client=None)
+
+    assert runner.is_due() is True

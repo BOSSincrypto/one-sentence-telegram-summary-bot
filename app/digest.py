@@ -47,6 +47,7 @@ class Line:
     key: str = ""
     summary: str = ""
     is_ad: bool = False
+    rank: int = 3
     also_in: list[str] = field(default_factory=list)
 
     @property
@@ -211,8 +212,9 @@ async def _summarise(
     blocks: list[Block],
     chain: list[str],
     settings: dict,
+    style: str = "sentence",
 ) -> tuple[float, list[str], list[str]]:
-    limit = int(settings["sentence_max"])
+    limit = int(settings["channel_sentence_max"] if style == "label" else settings["sentence_max"])
     verbatim = int(settings["short_verbatim"])
     cost = 0.0
     used: list[str] = []
@@ -252,7 +254,12 @@ async def _summarise(
 
         if todo:
             try:
-                results, call_cost, model = await client.summarize(block.title, todo, chain)
+                if style == "label":
+                    results, call_cost, model = await client.summarize(
+                        block.title, todo, chain, style="label"
+                    )
+                else:
+                    results, call_cost, model = await client.summarize(block.title, todo, chain)
                 cost += call_cost
                 if model and model not in used:
                     used.append(model)
@@ -260,6 +267,7 @@ async def _summarise(
                     result = results.get(item.key)
                     if result:
                         line.summary, line.is_ad = result.summary, result.is_ad
+                        line.rank = min(5, max(1, int(getattr(result, "rank", 3) or 3)))
                         fresh.append((item.key, result.summary, result.is_ad))
             except BudgetExceeded as exc:
                 errors.append(str(exc))
@@ -383,3 +391,118 @@ def _dedupe_across(blocks: list[Block], max_distance: int) -> int:
     for block in blocks:
         block.items = [line for line in block.items if id(line) in survivors]
     return len(pool) - len(kept)
+
+
+# Sentinel group id for the public channel ledger: delivery bookkeeping for
+# the channel lives in the same `sent` table but never collides with groups.
+CHANNEL_GROUP_ID = 0
+
+
+async def build_channel(
+    session: ClientSession,
+    client: OpenRouter,
+    *,
+    respect_sent: bool = True,
+) -> Digest:
+    """Builds the public ciscrypted-style digest in ONE pass.
+
+    Unlike :func:`build` (one digest per group), this collects every enabled
+    channel once, dedupes across channels, then summarises + ranks every post
+    in a single LLM call per channel (``style="label"``). Short
+    ciscrypted-style labels and the 1-5 importance rank come back together,
+    so LLM-ranking costs zero extra requests.
+    """
+    settings = db.settings()
+    now = int(time.time())
+    since = now - int(settings["window_hours"]) * 3600
+    digest = Digest(
+        group_id=CHANNEL_GROUP_ID,
+        group_name="CRYPTO ВЫЖИМКА",
+        group_emoji="⚡",
+        blocks=[],
+        window_start=since,
+        window_end=now,
+    )
+    if not settings.get("channel_enabled", True):
+        digest.errors.append("Публичный канал отключён.")
+        return digest
+
+    source_group = int(settings.get("channel_group_id") or 0)
+    if source_group:
+        row = db.group(source_group)
+        if row is None:
+            digest.errors.append("Группа-источник канала не найдена.")
+            return digest
+        channels = [r for r in db.group_channels(source_group) if r["enabled"]]
+    else:
+        channels = db.channels(enabled_only=True)
+    if not channels:
+        digest.errors.append("Нет активных каналов для публичного дайджеста.")
+        return digest
+
+    fetched, digest.errors = await _collect(
+        session, channels, since, int(settings["concurrency"]), int(settings["max_pages"])
+    )
+
+    max_posts = max(1, int(settings.get("channel_max_posts") or 5))
+    seen: set[tuple[int, int]] = set()
+    if respect_sent and settings["no_repeat"]:
+        candidate_pairs = [(cid, post.id) for cid, (_, posts) in fetched.items() for post in posts]
+        seen = db.already_sent(CHANNEL_GROUP_ID, candidate_pairs)
+
+    blocks: list[Block] = []
+    for row in channels:
+        entry = fetched.get(int(row["id"]))
+        if entry is None:
+            continue
+        title, posts = entry
+        block = _select(
+            row,
+            title,
+            posts,
+            settings=settings,
+            allow=[],
+            deny=[],
+            seen=seen,
+            max_posts=max_posts,
+        )
+        # Channel digest is a flat ranked list: overflow topics become full
+        # labels so every line competes for the final top-N on equal terms.
+        for line in block.extra:
+            line.full = True
+        block.items = block.items + block.extra
+        block.extra = []
+        block.hidden = 0
+        if block.items:
+            blocks.append(block)
+
+    if settings["dedupe"]:
+        digest.deduped = _dedupe_across(blocks, int(settings["dedupe_dist"]))
+
+    chain = [m for m in (settings["models"] or []) if m]
+    cost, models, llm_errors = await _summarise(client, blocks, chain, settings, style="label")
+    digest.cost, digest.models = cost, models
+    digest.errors.extend(llm_errors)
+
+    if settings["skip_ads"]:
+        for block in blocks:
+            before = len(block.items)
+            block.items = [line for line in block.items if not line.is_ad]
+            digest.skipped_ads += before - len(block.items)
+
+    min_rank = int(settings.get("channel_min_rank") or 3)
+    total_max = max(1, int(settings.get("channel_total_max") or 25))
+    pool = [line for block in blocks for line in block.items]
+    ranked = [line for line in pool if line.rank >= min_rank]
+    if not ranked:
+        # Never publish an empty digest when posts exist: fall back to the
+        # best of what the ranker rejected.
+        ranked = sorted(pool, key=lambda line: (-line.rank, -line.views, line.ts))
+    ranked.sort(key=lambda line: (-line.rank, -line.views, line.ts))
+    survivors = {id(line) for line in ranked[:total_max]}
+    for block in blocks:
+        block.items = [line for line in block.items if id(line) in survivors]
+        block.items.sort(key=lambda line: (-line.rank, -line.views, line.ts))
+
+    digest.blocks = [b for b in blocks if b.items]
+    return digest

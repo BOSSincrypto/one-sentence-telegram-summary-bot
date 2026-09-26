@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from aiohttp import ClientSession, ClientTimeout
 
@@ -47,6 +47,31 @@ SYSTEM_PROMPT = (
     "Верни ровно столько объектов, сколько постов на входе, в том же порядке."
 )
 
+# Ciscrypted-style digest: short human-like label + importance rank in ONE call,
+# so LLM-ranking costs zero extra requests on top of summarisation.
+CHANNEL_SYSTEM_PROMPT = (
+    "Ты — куратор CIS-крипто дайджеста в стиле CIS CRYPTO DIGEST. "
+    "На вход подаётся список постов одного канала.\n"
+    "Для каждого поста верни объект:\n"
+    "• i — номер поста ровно как во входных данных;\n"
+    "• s — если пост помечен «П»: короткий ярлык-суть на русском длиной "
+    "до {limit} символов, 3–8 слов, как человек пишет в дайджесте "
+    "(«Sophon сворачивается и уходит на Base», «SEC готовит Regulation Crypto»). "
+    "Если пост помечен «Т»: тема из 2–4 слов без точки в конце;\n"
+    "• r — важность для дневного дайджеста от 1 до 5: "
+    "5 — топ-новость дня, 4 — важно, 3 — обычно, 2 — слабо, 1 — мусор;\n"
+    "• ad — true, если пост является рекламой, промо, розыгрышем, партнёрским "
+    "материалом или призывом подписаться на сторонний ресурс.\n\n"
+    "Правила для s:\n"
+    "— всегда по-русски, даже если пост на другом языке;\n"
+    "— без вводных оборотов («В посте сообщается», «Автор пишет») — сразу суть;\n"
+    "— без эмодзи, хештегов, ссылок и упоминаний канала;\n"
+    "— конкретика вместо общих слов: кто, что, где, сколько;\n"
+    "— только факты из текста поста, ничего не додумывай;\n"
+    "— без точки в конце.\n\n"
+    "Верни ровно столько объектов, сколько постов на входе, в том же порядке."
+)
+
 _SCHEMA = {
     "name": "digest",
     "strict": True,
@@ -61,6 +86,7 @@ _SCHEMA = {
                         "i": {"type": "integer"},
                         "s": {"type": "string"},
                         "ad": {"type": "boolean"},
+                        "r": {"type": "integer", "minimum": 1, "maximum": 5},
                     },
                     "required": ["i", "s", "ad"],
                     "additionalProperties": False,
@@ -116,6 +142,7 @@ class Item:
 class Result:
     summary: str
     is_ad: bool
+    rank: int = 3
 
 
 def _slim(raw: dict) -> ModelInfo | None:
@@ -177,7 +204,7 @@ class OpenRouter:
         models = [m for m in (_slim(raw) for raw in payload.get("data", [])) if m]
         models.sort(key=lambda m: (not m.free, m.prompt_price, m.id))
         self._models = models
-        db.put(_MODELS_KEY, {"ts": int(time.time()), "items": [vars(m) for m in models]})
+        db.put(_MODELS_KEY, {"ts": int(time.time()), "items": [asdict(m) for m in models]})
         return models
 
     async def find(self, model_id: str) -> ModelInfo | None:
@@ -193,12 +220,16 @@ class OpenRouter:
         channel_title: str,
         items: list[Item],
         chain: list[str],
+        style: str = "sentence",
     ) -> tuple[dict[str, Result], float, str]:
         """Summarises one channel's posts in a single request.
 
         Returns ``(results_by_key, cost_usd, model_used)``. Models in ``chain``
         are tried in order; a model that errors, rate-limits or returns
         unusable JSON hands over to the next one.
+
+        ``style="label"`` switches to the ciscrypted-style short label plus
+        an importance rank (1-5) in the same call — no extra requests.
         """
         if not items:
             return {}, 0.0, ""
@@ -208,6 +239,10 @@ class OpenRouter:
         self._check_budget()
 
         limit = int(db.get("sentence_max"))
+        system_template = SYSTEM_PROMPT
+        if style == "label":
+            limit = int(db.get("channel_sentence_max") or limit)
+            system_template = CHANNEL_SYSTEM_PROMPT
         user = self._render_prompt(channel_title, items)
         max_tokens = min(8000, 90 * len(items) + 300)
 
@@ -215,7 +250,9 @@ class OpenRouter:
         for model_id in chain:
             info = await self.find(model_id)
             try:
-                raw, cost = await self._call(model_id, info, user, limit, max_tokens)
+                raw, cost = await self._call(
+                    model_id, info, user, limit, max_tokens, system_template
+                )
             except BudgetExceeded:
                 raise
             except LLMError as exc:
@@ -257,11 +294,12 @@ class OpenRouter:
         user: str,
         limit: int,
         max_tokens: int,
+        system_template: str = SYSTEM_PROMPT,
     ) -> tuple[str, float]:
         body: dict = {
             "model": model_id,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT.format(limit=limit)},
+                {"role": "system", "content": system_template.format(limit=limit)},
                 {"role": "user", "content": user},
             ],
             "temperature": 0.3,
@@ -382,6 +420,11 @@ def _parse(raw: str, items: list[Item]) -> dict[str, Result] | None:
         summary = str(row.get("s") or "").strip()
         if not summary:
             continue
-        out[items[idx - 1].key] = Result(summary=summary, is_ad=bool(row.get("ad")))
+        try:
+            rank = int(row.get("r", 3))
+        except (TypeError, ValueError):
+            rank = 3
+        rank = min(5, max(1, rank))
+        out[items[idx - 1].key] = Result(summary=summary, is_ad=bool(row.get("ad")), rank=rank)
 
     return out or None

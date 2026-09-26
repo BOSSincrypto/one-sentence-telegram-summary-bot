@@ -27,7 +27,7 @@ def digest_with(*blocks: Block, **kwargs) -> Digest:
     return Digest(
         group_id=1,
         group_name="Новости",
-        group_emoji="🗞",
+        group_emoji="\U0001f5de",
         blocks=list(blocks),
         window_start=WINDOW_END - 86400,
         window_end=WINDOW_END,
@@ -46,18 +46,26 @@ def block(*lines: Line, extra: list[Line] | None = None, hidden: int = 0) -> Blo
     )
 
 
-def test_each_summary_links_to_its_own_post():
+def test_each_summary_links_to_its_own_post_with_a_visible_chip():
     out = render.render(digest_with(block(line(101, "Первое."), line(102, "Второе."))))
     text = "\n".join(out)
 
-    assert '<a href="https://t.me/chan/101">1</a> · Первое.' in text
-    assert '<a href="https://t.me/chan/102">2</a> · Второе.' in text
+    # Both tag forms point at the same destination, so a thumb that misses one
+    # tap target can still land on the other.
+    assert (
+        '<b><a href="https://t.me/chan/101">\u2460</a></b> Первое.'
+        '<a href="https://t.me/chan/101"> \u2197 Открыть</a>'
+    ) in text
+    assert (
+        '<b><a href="https://t.me/chan/102">\u2461</a></b> Второе.'
+        '<a href="https://t.me/chan/102"> \u2197 Открыть</a>'
+    ) in text
 
 
 def test_header_reports_channels_and_posts():
     out = render.render(digest_with(block(line(1, "Раз."), line(2, "Два."))))
 
-    assert out[0].startswith("📰 <b>🗞 Новости</b>")
+    assert out[0].startswith(f"\U0001f4f0 <b>{chr(0x1F5DE)} Новости</b>")
     assert "1 канал" in out[0]
     assert "2 поста" in out[0]
 
@@ -88,18 +96,18 @@ def test_short_channels_are_not_folded():
     assert "<blockquote" not in "\n".join(out)
 
 
-def test_overflow_topics_are_rendered_as_links():
+def test_overflow_topics_are_rendered_as_bold_chips():
     extra = [line(9, "Тема одна"), line(10, "Тема два")]
     out = render.render(digest_with(block(line(1, "Главное."), extra=extra)))
     text = "\n".join(out)
 
     assert "Также писали про:" in text
-    assert '<a href="https://t.me/chan/9">Тема одна</a>' in text
+    assert ('<b><a href="https://t.me/chan/9">Тема одна</a></b>') in text
 
 
 def test_hidden_count_is_shown():
     out = render.render(digest_with(block(line(1, "Главное."), hidden=7)))
-    assert "и ещё 7 постов" in "\n".join(out)
+    assert "\u2026и ещё 7 постов" in "\n".join(out)
 
 
 def test_views_and_cross_posting_appear_only_when_asked():
@@ -107,7 +115,7 @@ def test_views_and_cross_posting_appear_only_when_asked():
     out = render.render(digest_with(block(line(1, "Событие.", views=4_500_000, also=["Другой"]))))
     text = "\n".join(out)
 
-    assert "👁 4.5M" in text
+    assert f"{chr(0x1F441)} 4.5M" in text
     assert "также: Другой" in text
 
 
@@ -133,7 +141,7 @@ def test_split_parts_each_carry_the_channel_heading():
 
     assert len(out) > 2
     for message in out[1:]:
-        assert "📣 <b>Канал</b>" in message
+        assert f"{chr(0x1F4E3)} <b>Канал</b>" in message
 
 
 def test_a_folded_block_that_overflows_reopens_its_quote_in_each_part():
@@ -167,6 +175,23 @@ def test_view_counts_are_humanised():
     assert render.human_views(999) == "999"
     assert render.human_views(82_000) == "82K"
     assert render.human_views(4_530_000) == "4.5M"
+
+
+def test_chip_labels_wrap_in_circled_digits_then_fall_back_to_keycaps():
+    assert render._chip_label(1) == "\u2460"
+    assert render._chip_label(5) == "\u2464"
+    assert render._chip_label(20) == "\u2473"
+    assert render._chip_label(21).endswith("\u20e3")  # keycap fallback past 20
+
+
+def test_each_opening_link_targets_the_post_underneath():
+    out = render.render(digest_with(block(line(101, "Раз."), line(102, "Два."))))
+    text = "\n".join(out)
+
+    # Every clickable element on a post row must point at the same t.me URL.
+    for pid in (101, 102):
+        url = f"https://t.me/chan/{pid}"
+        assert text.count(f'href="{url}"') == 2, f"expected two taps for {url} in: {text}"
 
 
 def test_no_message_contains_an_unclosed_tag():
