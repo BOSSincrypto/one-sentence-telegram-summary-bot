@@ -236,3 +236,69 @@ def render(digest: Digest, *, verbose: bool = False) -> list[str]:
             messages.append(note.strip())
 
     return messages
+
+
+def render_channel(digest: Digest, dest: str = "", *, verbose: bool = False) -> list[str]:
+    """Renders a flat ciscrypted-style digest for a public channel.
+
+    One line per post — ``<b>Source:</b> <a>short label</a>`` — no chips,
+    no «Открыть», no views/time meta, no expandable quotes. The flat list
+    is already ranked and truncated by :func:`app.digest.build_channel`,
+    so this only orders and packs.
+    """
+    zone = tz()
+    end = datetime.fromtimestamp(digest.window_end, zone)
+    total = sum(len(b.items) for b in digest.blocks)
+    header = (
+        f"\u26A1 <b>CRYPTO \u0412\u042B\u0416\u0418\u041C\u041A\u0410 \u2014 "
+        f"{end.day} {_MONTHS[end.month - 1]}</b>\n"
+        f"<i>\u0437\u0430 24 \u0447 \u00b7 {total} "
+        f"{plural(total, 'пост', 'поста', 'постов')} \u00b7 22:00 \u041C\u0421\u041A</i>"
+    )
+
+    handle = (dest or "").strip().lstrip("@").split("/")[0]
+    if handle and handle.startswith("-100"):
+        footer_link = ""
+    elif handle:
+        footer_link = (
+            "\n\n<b>CRYPTO \u0412\u042B\u0416\u0418\u041C\u041A\u0410</b> \u2014 "
+            f'<a href="https://t.me/{esc(handle)}">\u041F\u043E\u0434\u043F\u0438\u0448\u0438\u0441\u044C / '
+            "\u043F\u043E\u0434\u0435\u043B\u0438\u0441\u044C</a>"
+        )
+    else:
+        footer_link = "\n\n<b>CRYPTO \u0412\u042B\u0416\u0418\u041C\u041A\u0410</b>"
+
+    if not total:
+        body = "\n\n<i>\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u0442\u0438\u0445\u043E \u2014 \u0441\u0442\u043E\u044F\u0449\u0438\u0445 \u043F\u043E\u0441\u0442\u043E\u0432 \u043D\u0435 \u043D\u0430\u0448\u043B\u043E\u0441\u044C.</i>"
+        if verbose and digest.errors:
+            body += "\n\n\u26A0\ufe0f " + "\n\u26A0\ufe0f ".join(esc(e) for e in digest.errors)
+        return [header + body + footer_link]
+
+    flat: list[Line] = [line for block in digest.blocks for line in block.items]
+    flat.sort(key=lambda line: (-line.rank, -line.views, line.ts))
+
+    lines = []
+    for line in flat:
+        href = escape(line.link, quote=True)
+        label = esc(line.summary.rstrip(".").strip() or line.summary)
+        lines.append(f'<b>{esc(line.channel_title)}:</b> <a href="{href}">{label}</a>')
+
+    messages: list[str] = []
+    current = header
+    for text in lines:
+        candidate = f"{current}\n{text}"
+        if len(candidate) + len(footer_link) <= SAFE:
+            current = candidate
+        else:
+            messages.append(current)
+            current = text
+    current += footer_link
+    if verbose and digest.errors:
+        note = "\n\n\u26A0\ufe0f " + "\n\u26A0\ufe0f ".join(esc(e) for e in digest.errors)
+        if len(current) + len(note) <= SAFE:
+            current += note
+        else:
+            messages.append(current)
+            current = note.strip()
+    messages.append(current)
+    return messages

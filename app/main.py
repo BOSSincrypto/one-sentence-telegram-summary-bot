@@ -74,8 +74,9 @@ async def handle_tick(request: web.Request) -> web.Response:
         return web.Response(status=403, text="forbidden")
 
     force = request.query.get("force") == "1"
-    if not force and not runner.is_due():
-        return web.json_response({"status": "idle", "next": runner.next_run_at().isoformat()})
+    if not force and not runner.is_due() and not runner.is_channel_due():
+        nxt = min(runner.next_run_at(), runner.next_channel_at())
+        return web.json_response({"status": "idle", "next": nxt.isoformat()})
 
     runtime = app[RUNTIME]
     task = runtime.get("tick_task")
@@ -95,7 +96,8 @@ async def handle_tick(request: web.Request) -> web.Response:
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "next": runner.next_run_at().isoformat()})
+    nxt = min(runner.next_run_at(), runner.next_channel_at())
+    return web.json_response({"ok": True, "next": nxt.isoformat()})
 
 
 async def _on_startup(app: web.Application) -> None:
@@ -124,6 +126,16 @@ async def _on_startup(app: web.Application) -> None:
             log.info("cron-job.org: %s", result)
         except cronsync.CronError as exc:
             log.warning("cron-job.org sync failed: %s", exc)
+
+    if cfg.cronjob_key and str(db.get("channel_dest") or "").strip():
+        chour, cminute = runner.parse_time(db.get("channel_time") or "22:00")
+        try:
+            result = await cronsync.sync_channel(
+                app[SESSION], cfg.cronjob_key, cfg.tick_url, chour, cminute
+            )
+            log.info("cron-job.org channel: %s", result)
+        except cronsync.CronError as exc:
+            log.warning("cron-job.org channel sync failed: %s", exc)
 
 
 async def _on_cleanup(app: web.Application) -> None:
@@ -168,7 +180,7 @@ async def _dev_scheduler(bot: Bot, session: ClientSession, client: OpenRouter) -
     """Polling mode only: no external alarm exists locally."""
     while True:
         await asyncio.sleep(60)
-        if runner.is_due():
+        if runner.is_due() or runner.is_channel_due():
             with suppress(Exception):
                 await runner.run_all(bot, session, client)
 
@@ -201,6 +213,9 @@ def main() -> None:
     db.connect(cfg.db_path)
     if db.get("openrouter_key") == "" and cfg.openrouter_key:
         db.put("openrouter_key", cfg.openrouter_key)
+    channel_env = (os.getenv("CHANNEL_DEST") or "").strip()
+    if channel_env and not str(db.get("channel_dest") or "").strip():
+        db.put("channel_dest", channel_env)
 
     if cfg.polling:
         log.info("starting in polling mode (development)")
