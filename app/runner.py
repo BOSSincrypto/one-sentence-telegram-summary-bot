@@ -19,6 +19,8 @@ from .llm import OpenRouter
 log = logging.getLogger("runner")
 
 LAST_DAY_KEY = "_last_digest_day"
+LAST_CHANNEL_DAY_KEY = "_last_channel_day"
+CHANNEL_GROUP_ID = 0
 _lock = asyncio.Lock()
 
 
@@ -56,9 +58,40 @@ def is_due(now: datetime | None = None) -> bool:
     return db.get(LAST_DAY_KEY) != local.date().isoformat()
 
 
+def channel_dest() -> str:
+    return str(db.get("channel_dest") or "").strip()
+
+
+def next_channel_at(now: datetime | None = None) -> datetime:
+    """When the next public-channel digest is expected (default 22:00 MSK)."""
+    zone = render.tz()
+    local = (now or datetime.now(UTC)).astimezone(zone)
+    hour, minute = parse_time(db.get("channel_time") or "22:00")
+    scheduled = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if local < scheduled:
+        return scheduled
+    if db.get(LAST_CHANNEL_DAY_KEY) != local.date().isoformat():
+        return local  # overdue: the next tick will pick it up
+    return scheduled + timedelta(days=1)
+
+
+def is_channel_due(now: datetime | None = None) -> bool:
+    if not db.get("channel_enabled"):
+        return False
+    if not channel_dest():
+        return False
+    zone = render.tz()
+    local = (now or datetime.now(UTC)).astimezone(zone)
+    hour, minute = parse_time(db.get("channel_time") or "22:00")
+    scheduled = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if local < scheduled:
+        return False
+    return db.get(LAST_CHANNEL_DAY_KEY) != local.date().isoformat()
+
+
 async def send_messages(
     bot: Bot,
-    chat_id: int,
+    chat_id: int | str,
     thread_id: int | None,
     messages: list[str],
 ) -> None:
@@ -121,6 +154,56 @@ async def run_group(
     return result
 
 
+async def run_channel(
+    bot: Bot,
+    session: ClientSession,
+    client: OpenRouter,
+    *,
+    preview_to: int | None = None,
+    force: bool = False,
+) -> digest_mod.Digest | None:
+    """Builds the public-channel digest and publishes it.
+
+    ``preview_to`` sends to that chat instead of the channel, ignores the
+    sent ledger and does not stamp the day — previews stay free to repeat.
+    Returns None when the channel is not configured.
+    """
+    dest = channel_dest()
+    if not dest and preview_to is None:
+        return None
+    started = time.perf_counter()
+    preview = preview_to is not None
+    result = await digest_mod.build_channel(session, client, respect_sent=not preview)
+    messages = render.render_channel(result, dest, verbose=preview)
+
+    error = ""
+    try:
+        if preview:
+            await send_messages(bot, preview_to, None, messages)
+        else:
+            # Public channels take no thread id; empty digests still publish
+            # the "Сегодня тихо" stub so subscribers see the rhythm hold.
+            await send_messages(bot, dest, None, messages)
+            db.mark_sent(CHANNEL_GROUP_ID, result.pairs)
+    except TelegramAPIError as exc:
+        error = f"Telegram: {exc.__class__.__name__}: {exc}"
+        result.errors.append(error)
+
+    if not preview:
+        db.log_run(
+            CHANNEL_GROUP_ID,
+            ok=not error,
+            posts=result.total,
+            cost=result.cost,
+            ms=int((time.perf_counter() - started) * 1000),
+            err=error or "; ".join(result.errors)[:300],
+        )
+        if not error or force:
+            zone = render.tz()
+            db.put(LAST_CHANNEL_DAY_KEY, datetime.now(zone).date().isoformat())
+    return result
+
+
 async def run_all(bot: Bot, session: ClientSession, client: OpenRouter) -> list[digest_mod.Digest]:
     """Runs every enabled, bound group. Guarded so two ticks cannot overlap."""
     if _lock.locked():
@@ -129,8 +212,6 @@ async def run_all(bot: Bot, session: ClientSession, client: OpenRouter) -> list[
 
     async with _lock:
         groups = db.groups(enabled_only=True)
-        if not groups:
-            return []
 
         results: list[digest_mod.Digest] = []
         had_unhandled_failure = False
@@ -142,10 +223,22 @@ async def run_all(bot: Bot, session: ClientSession, client: OpenRouter) -> list[
                 db.log_run(int(group["id"]), ok=False, posts=0, cost=0.0, ms=0, err=repr(exc))
                 had_unhandled_failure = True
 
-        if not had_unhandled_failure:
+        if not had_unhandled_failure and groups:
             zone = render.tz()
             db.put(LAST_DAY_KEY, datetime.now(zone).date().isoformat())
-        db.prune()
+
+        # Public channel runs on its own 22:00 schedule, even with no groups.
+        if is_channel_due():
+            try:
+                channel_result = await run_channel(bot, session, client)
+                if channel_result is not None:
+                    results.append(channel_result)
+            except Exception as exc:  # pragma: no cover - never kill the loop
+                log.exception("public channel failed")
+                db.log_run(CHANNEL_GROUP_ID, ok=False, posts=0, cost=0.0, ms=0, err=repr(exc))
+
+        if results:
+            db.prune()
         return results
 
 

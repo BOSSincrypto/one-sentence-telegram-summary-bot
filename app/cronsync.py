@@ -16,6 +16,7 @@ from . import db
 API = "https://api.cron-job.org"
 _TIMEOUT = ClientTimeout(total=20)
 TITLE = "Telegram Digest Bot — tick"
+TITLE_CHANNEL = "Telegram Digest Bot — tick (channel 22:00)"
 
 # Retrying 15 minutes later costs one extra wake-up and covers a transient
 # failure to reach the machine. It is skipped when it would spill into the
@@ -71,6 +72,28 @@ async def _request(
 
 async def sync(session: ClientSession, key: str, tick_url: str, hour: int, minute: int) -> str:
     """Creates or updates the alarm. Returns a short status line for the UI."""
+    return await _sync_with(session, key, tick_url, hour, minute, TITLE, "cron_job_id")
+
+
+async def sync_channel(
+    session: ClientSession, key: str, tick_url: str, hour: int, minute: int
+) -> str:
+    """Second alarm that wakes the machine for the 22:00 public digest."""
+    return await _sync_with(
+        session, key, tick_url, hour, minute, TITLE_CHANNEL, "channel_cron_job_id"
+    )
+
+
+async def _sync_with(
+    session: ClientSession,
+    key: str,
+    tick_url: str,
+    hour: int,
+    minute: int,
+    title: str,
+    job_key: str,
+) -> str:
+    """Creates or updates the alarm. Returns a short status line for the UI."""
     if not key:
         raise CronError("ключ cron-job.org не задан")
 
@@ -78,12 +101,12 @@ async def sync(session: ClientSession, key: str, tick_url: str, hour: int, minut
         "url": tick_url,
         "enabled": True,
         "saveResponses": False,
-        "title": TITLE,
+        "title": title,
         "requestTimeout": 30,
         "schedule": schedule_for(hour, minute, str(db.get("tz"))),
     }
 
-    job_id = int(db.get("cron_job_id") or 0)
+    job_id = int(db.get(job_key) or 0)
     if job_id:
         try:
             await _request(session, key, "PATCH", f"/jobs/{job_id}", {"job": job})
@@ -91,13 +114,13 @@ async def sync(session: ClientSession, key: str, tick_url: str, hour: int, minut
         except CronError as exc:
             if "404" not in str(exc):
                 raise
-            db.put("cron_job_id", 0)
+            db.put(job_key, 0)
 
     created = await _request(session, key, "PUT", "/jobs", {"job": job})
     new_id = int(created.get("jobId") or 0)
     if not new_id:
         raise CronError("cron-job.org не вернул jobId")
-    db.put("cron_job_id", new_id)
+    db.put(job_key, new_id)
     return f"создана задача #{new_id}"
 
 

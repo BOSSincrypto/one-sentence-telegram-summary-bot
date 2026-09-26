@@ -51,6 +51,16 @@ DEFAULTS: dict[str, Any] = {
     "concurrency": 3,  # parallel t.me fetches
     "max_pages": 8,  # t.me pages scanned per channel (20 posts each)
     "cron_job_id": 0,  # cron-job.org job managed by the bot
+    # --- public channel (ciscrypted-style digest) ---------------------------
+    "channel_dest": "",  # "@cryptovyzhimka" or "-100..." — empty = disabled
+    "channel_enabled": True,
+    "channel_time": "22:00",  # HH:MM in `tz` (Europe/Moscow)
+    "channel_group_id": 0,  # 0 = all enabled channels, else one grp.id
+    "channel_max_posts": 5,  # detailed items per channel before ranking
+    "channel_total_max": 25,  # lines in the published digest
+    "channel_min_rank": 3,  # LLM rank 1-5, below this is cut
+    "channel_sentence_max": 70,  # ciscrypted-style label length
+    "channel_cron_job_id": 0,  # second cron-job.org alarm for 22:00
 }
 
 _DDL = """

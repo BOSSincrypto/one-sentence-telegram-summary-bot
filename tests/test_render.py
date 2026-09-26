@@ -27,7 +27,7 @@ def digest_with(*blocks: Block, **kwargs) -> Digest:
     return Digest(
         group_id=1,
         group_name="Новости",
-        group_emoji="\U0001F5DE",
+        group_emoji="\U0001f5de",
         blocks=list(blocks),
         window_start=WINDOW_END - 86400,
         window_end=WINDOW_END,
@@ -65,7 +65,7 @@ def test_each_summary_links_to_its_own_post_with_a_visible_chip():
 def test_header_reports_channels_and_posts():
     out = render.render(digest_with(block(line(1, "Раз."), line(2, "Два."))))
 
-    assert out[0].startswith(f"\U0001F4F0 <b>{chr(0x1F5DE)} Новости</b>")
+    assert out[0].startswith(f"\U0001f4f0 <b>{chr(0x1F5DE)} Новости</b>")
     assert "1 канал" in out[0]
     assert "2 поста" in out[0]
 
@@ -102,9 +102,7 @@ def test_overflow_topics_are_rendered_as_bold_chips():
     text = "\n".join(out)
 
     assert "Также писали про:" in text
-    assert (
-        '<b><a href="https://t.me/chan/9">Тема одна</a></b>'
-    ) in text
+    assert ('<b><a href="https://t.me/chan/9">Тема одна</a></b>') in text
 
 
 def test_hidden_count_is_shown():
