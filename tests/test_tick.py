@@ -30,7 +30,7 @@ class Recorder:
 def client_app(monkeypatch):
     recorder = Recorder()
 
-    async def run_due(app):
+    async def run_due(app, *, force=False):
         await recorder(app)
 
     monkeypatch.setattr(main, "_run_due", run_due)

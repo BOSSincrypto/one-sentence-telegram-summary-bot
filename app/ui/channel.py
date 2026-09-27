@@ -9,6 +9,7 @@ preview into the owner's DM and manual publishing.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -75,6 +76,20 @@ def _source_label() -> str:
     return f"все каналы ({n} акт.)"
 
 
+def _last_run_line() -> str:
+    """One-line diagnosis of the latest channel run (or why there is none)."""
+    for row in db.recent_runs(50):
+        if int(row["group_id"]) != runner.CHANNEL_GROUP_ID:
+            continue
+        when = datetime.fromtimestamp(int(row["ts"]), render.tz()).strftime("%d.%m %H:%M")
+        if not row["ok"]:
+            return f"Последний выпуск: ❌ {when} — {render.esc((row['err'] or 'ошибка')[:160])}"
+        return f"Последний выпуск: ✅ {when} — {row['posts']} постов, ${float(row['cost']):.4f}" + (
+            f" — {render.esc((row['err'] or '')[:160])}" if row["err"] else ""
+        )
+    return "Последний выпуск: ещё не было"
+
+
 def _status_text() -> str:
     dest = runner.channel_dest()
     upcoming = runner.next_channel_at()
@@ -86,6 +101,7 @@ def _status_text() -> str:
         f"🕙 Время: <b>{db.get('channel_time')}</b> · {db.get('tz')}",
         f"   ближайший выпуск: {upcoming:%d.%m %H:%M}",
         f"Источники: {_source_label()}",
+        f"{_last_run_line()}",
         "",
         "<b>Отбор</b>",
         f"• Постов с канала: {db.get('channel_max_posts')}",

@@ -204,33 +204,42 @@ async def run_channel(
     return result
 
 
-async def run_all(bot: Bot, session: ClientSession, client: OpenRouter) -> list[digest_mod.Digest]:
-    """Runs every enabled, bound group. Guarded so two ticks cannot overlap."""
+async def run_all(
+    bot: Bot, session: ClientSession, client: OpenRouter, *, force: bool = False
+) -> list[digest_mod.Digest]:
+    """Runs whatever is due: groups on their schedule, channel on its own.
+
+    A 22:00 channel tick must not re-post the morning group digests, and a
+    09:00 group tick must not touch the channel — each side runs only when
+    its own schedule says so (or when forced by hand).
+    Guarded so two ticks cannot overlap.
+    """
     if _lock.locked():
         log.info("run_all skipped: another run is in progress")
         return []
 
     async with _lock:
-        groups = db.groups(enabled_only=True)
-
         results: list[digest_mod.Digest] = []
-        had_unhandled_failure = False
-        for group in groups:
-            try:
-                results.append(await run_group(bot, session, client, group))
-            except Exception as exc:  # pragma: no cover - never kill the loop
-                log.exception("group %s failed", group["id"])
-                db.log_run(int(group["id"]), ok=False, posts=0, cost=0.0, ms=0, err=repr(exc))
-                had_unhandled_failure = True
 
-        if not had_unhandled_failure and groups:
-            zone = render.tz()
-            db.put(LAST_DAY_KEY, datetime.now(zone).date().isoformat())
+        if force or is_due():
+            groups = db.groups(enabled_only=True)
+            had_unhandled_failure = False
+            for group in groups:
+                try:
+                    results.append(await run_group(bot, session, client, group))
+                except Exception as exc:  # pragma: no cover - never kill the loop
+                    log.exception("group %s failed", group["id"])
+                    db.log_run(int(group["id"]), ok=False, posts=0, cost=0.0, ms=0, err=repr(exc))
+                    had_unhandled_failure = True
+
+            if not had_unhandled_failure and groups:
+                zone = render.tz()
+                db.put(LAST_DAY_KEY, datetime.now(zone).date().isoformat())
 
         # Public channel runs on its own 22:00 schedule, even with no groups.
-        if is_channel_due():
+        if force or is_channel_due():
             try:
-                channel_result = await run_channel(bot, session, client)
+                channel_result = await run_channel(bot, session, client, force=force)
                 if channel_result is not None:
                     results.append(channel_result)
             except Exception as exc:  # pragma: no cover - never kill the loop

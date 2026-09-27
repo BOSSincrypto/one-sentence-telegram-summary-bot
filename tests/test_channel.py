@@ -280,3 +280,58 @@ async def test_run_all_runs_channel_with_no_groups(monkeypatch):
 
     assert len(results) == 1
     assert results[0].group_id == CHANNEL_GROUP_ID
+
+
+async def test_run_all_skips_groups_when_only_channel_is_due(monkeypatch):
+    """The 22:00 channel tick must not re-post the morning group digests."""
+    db.put("short_verbatim", 0)
+    db.put("digest_time", "09:00")
+    db.put(runner.LAST_DAY_KEY, db.local_date().isoformat())  # groups already ran today
+    db.put("channel_dest", "@cryptovyzhimka")
+    db.put("channel_time", "22:00")
+    db.put(runner.LAST_CHANNEL_DAY_KEY, "2000-01-01")
+    group_id = db.add_group("AI")
+    db.update_group(group_id, chat_id=123)
+    db.add_channel("chan")
+    patch_fetch(monkeypatch, {"chan": [post(1, "Важная длинная новость про рынок сегодня")]})
+
+    async def boom(*_args, **_kwargs):
+        raise AssertionError("groups must not run on a channel-only tick")
+
+    monkeypatch.setattr(runner, "run_group", boom)
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, message_thread_id=None):
+            pass
+
+    # Groups already ran today, channel never did: only the channel may run.
+    monkeypatch.setattr(runner, "is_due", lambda now=None: False)
+    monkeypatch.setattr(
+        runner,
+        "is_channel_due",
+        lambda now=None: db.get(runner.LAST_CHANNEL_DAY_KEY) != "2026-09-27",
+    )
+
+    results = await runner.run_all(FakeBot(), None, FakeChannelRouter())
+
+    assert [r.group_id for r in results] == [CHANNEL_GROUP_ID]
+
+
+async def test_run_all_force_runs_both_sides(monkeypatch):
+    db.put("short_verbatim", 0)
+    db.put(runner.LAST_DAY_KEY, db.local_date().isoformat())
+    db.put(runner.LAST_CHANNEL_DAY_KEY, db.local_date().isoformat())
+    db.put("channel_dest", "@cryptovyzhimka")
+    group_id = db.add_group("AI")
+    db.update_group(group_id, chat_id=123)
+    seed_channels("chan")
+    db.toggle_group_channel(group_id, db.add_channel("chan"))
+    patch_fetch(monkeypatch, {"chan": [post(1, "Важная длинная новость про рынок сегодня")]})
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, message_thread_id=None):
+            pass
+
+    results = await runner.run_all(FakeBot(), None, FakeChannelRouter(), force=True)
+
+    assert {r.group_id for r in results} == {group_id, CHANNEL_GROUP_ID}

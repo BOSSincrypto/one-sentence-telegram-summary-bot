@@ -54,9 +54,9 @@ COMMANDS = [
 ]
 
 
-async def _run_due(app: web.Application) -> None:
+async def _run_due(app: web.Application, *, force: bool = False) -> None:
     bot, session, client = app[BOT], app[SESSION], app[OPENROUTER]
-    results = await runner.run_all(bot, session, client)
+    results = await runner.run_all(bot, session, client, force=force)
     if results:
         await runner.notify_problems(bot, app[CONFIG].owner_ids, results)
 
@@ -83,7 +83,7 @@ async def handle_tick(request: web.Request) -> web.Response:
     if task is not None and not task.done():
         return web.json_response({"status": "running"})
 
-    task = asyncio.create_task(_run_due(app))
+    task = asyncio.create_task(_run_due(app, force=force))
     task.add_done_callback(_log_task_result)
     runtime["tick_task"] = task
 
