@@ -55,7 +55,7 @@ DEFAULTS: dict[str, Any] = {
     "channel_dest": "",  # "@cryptovyzhimka" or "-100..." — empty = disabled
     "channel_enabled": True,
     "channel_time": "22:00",  # HH:MM in `tz` (Europe/Moscow)
-    "channel_group_id": 0,  # 0 = all enabled channels, else one grp.id
+    "channel_group_id": 0,  # 0 = all enabled, -1 = dedicated set, else one grp.id
     "channel_max_posts": 5,  # detailed items per channel before ranking
     "channel_total_max": 25,  # lines in the published digest
     "channel_min_rank": 3,  # LLM rank 1-5, below this is cut
