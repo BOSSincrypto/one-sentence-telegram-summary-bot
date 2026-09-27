@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from aiogram import F, Router
 
-from . import ai, binding, channels, groups, menu, settings, stats
+from . import ai, binding, channel, channels, groups, menu, settings, stats
 from .common import OwnerOnly
 
 _root: Router | None = None
@@ -37,6 +37,7 @@ def build_router(owner_ids: Iterable[int]) -> Router:
         menu.router,
         channels.router,
         groups.router,
+        channel.router,
         ai.router,
         settings.router,
         stats.router,

@@ -29,11 +29,13 @@ def menu_text() -> str:
     when = "сегодня" if upcoming.date() == today else upcoming.strftime("%d.%m")
     spent = db.month_cost(db.local_date().strftime("%Y-%m"))
 
+    ch_state = "вкл" if db.get("channel_enabled") else "выкл"
     lines = [
         "🤖 <b>Дайджест-бот</b>",
         "",
         f"📡 Каналы: {len(channels)} (активных {active})",
         f"🗂 Группы: {len(groups)} (настроено {bound})",
+        (f"📣 Канал: {runner.channel_dest() or 'не задан'} ({db.get('channel_time')}, {ch_state})"),
         f"🧠 Модель: {cut(chain[0], 40) if chain else '<b>не выбрана</b>'}",
         f"🕘 Ближайший дайджест: {when} в {upcoming:%H:%M} ({db.get('tz')})",
         f"💰 Потрачено в этом месяце: ${spent:.4f}",
@@ -48,11 +50,12 @@ def menu_text() -> str:
 def menu_kb():
     return kb(
         [Button(text="📡 Каналы", callback_data="ch"), Button(text="🗂 Группы", callback_data="g")],
-        [Button(text="🧠 ИИ", callback_data="ai"), Button(text="⚙️ Настройки", callback_data="s")],
+        [Button(text="📣 Канал", callback_data="pub"), Button(text="🧠 ИИ", callback_data="ai")],
         [
+            Button(text="⚙️ Настройки", callback_data="s"),
             Button(text="📊 Статистика", callback_data="st"),
-            Button(text="▶️ Собрать сейчас", callback_data="run"),
         ],
+        [Button(text="▶️ Собрать сейчас", callback_data="run")],
         [Button(text="🔄 Обновить", callback_data="m")],
     )
 
