@@ -124,6 +124,35 @@ async def test_build_channel_never_empty_when_posts_exist(monkeypatch):
     assert result.total == 1  # rank fallback keeps the best of the rejected
 
 
+def test_pub_source_toggle_round_trip():
+    cid = db.add_channel("chan")
+
+    assert db.toggle_pub_source(cid) is True
+    assert db.pub_source_ids() == {cid}
+    assert db.toggle_pub_source(cid) is False
+    assert db.pub_source_ids() == set()
+
+
+async def test_build_channel_uses_dedicated_set(monkeypatch):
+    db.put("short_verbatim", 0)
+    db.put("channel_min_rank", 1)
+    seed_channels("wanted", "extra")
+    wanted = db.add_channel("wanted")
+    db.toggle_pub_source(wanted)
+    db.put("channel_group_id", digest.CHANNEL_SOURCE_CUSTOM)
+    patch_fetch(
+        monkeypatch,
+        {
+            "wanted": [post(1, "Важная длинная новость про рынок сегодня")],
+            "extra": [post(2, "Другая длинная новость про рынок сегодня")],
+        },
+    )
+    result = await digest.build_channel(None, FakeChannelRouter())
+
+    assert result.total == 1
+    assert result.blocks[0].username == "wanted"
+
+
 # --------------------------------------------------------------------------- #
 # render_channel
 # --------------------------------------------------------------------------- #

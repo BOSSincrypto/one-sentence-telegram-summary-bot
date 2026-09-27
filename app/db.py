@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS grp_channel (
     PRIMARY KEY (group_id, channel_id)
 );
 
+-- Dedicated source set for the public channel digest: independent of groups,
+-- so the 22:00 MSK post can follow its own 30-channel lineup.
+CREATE TABLE IF NOT EXISTS pub_source (
+    channel_id INTEGER NOT NULL REFERENCES channel(id) ON DELETE CASCADE,
+    PRIMARY KEY (channel_id)
+);
+
 CREATE TABLE IF NOT EXISTS topic (
     chat_id    INTEGER NOT NULL,
     thread_id  INTEGER NOT NULL,
@@ -377,6 +384,32 @@ def groups_using_channel(channel_id: int) -> list[str]:
             (channel_id,),
         )
     ]
+
+
+def pub_source_ids() -> set[int]:
+    return {int(r["channel_id"]) for r in db().execute("SELECT channel_id FROM pub_source")}
+
+
+def pub_source_channels(enabled_only: bool = False) -> list[sqlite3.Row]:
+    sql = "SELECT c.* FROM channel c JOIN pub_source p ON p.channel_id=c.id"
+    if enabled_only:
+        sql += " WHERE c.enabled=1"
+    return list(db().execute(sql + " ORDER BY LOWER(c.username)"))
+
+
+def toggle_pub_source(channel_id: int) -> bool:
+    """Returns True if the channel ended up in the public set."""
+    cur = db().execute("DELETE FROM pub_source WHERE channel_id=?", (channel_id,))
+    if cur.rowcount:
+        return False
+    db().execute("INSERT INTO pub_source(channel_id) VALUES(?)", (channel_id,))
+    return True
+
+
+def fill_pub_source(channel_ids: list[int]) -> None:
+    db().executemany(
+        "INSERT OR IGNORE INTO pub_source(channel_id) VALUES(?)", [(c,) for c in channel_ids]
+    )
 
 
 # --------------------------------------------------------------------------- #

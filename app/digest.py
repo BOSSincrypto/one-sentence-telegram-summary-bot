@@ -397,6 +397,10 @@ def _dedupe_across(blocks: list[Block], max_distance: int) -> int:
 # the channel lives in the same `sent` table but never collides with groups.
 CHANNEL_GROUP_ID = 0
 
+# Value of the `channel_group_id` setting that means "the dedicated public
+# set" (the `pub_source` table) instead of all channels (0) or one group (>0).
+CHANNEL_SOURCE_CUSTOM = -1
+
 
 async def build_channel(
     session: ClientSession,
@@ -428,7 +432,9 @@ async def build_channel(
         return digest
 
     source_group = int(settings.get("channel_group_id") or 0)
-    if source_group:
+    if source_group == CHANNEL_SOURCE_CUSTOM:
+        channels = db.pub_source_channels(enabled_only=True)
+    elif source_group:
         row = db.group(source_group)
         if row is None:
             digest.errors.append("Группа-источник канала не найдена.")

@@ -18,8 +18,9 @@ from aiohttp import ClientSession
 
 from .. import cronsync, db, render, runner, tme
 from ..config import Config
+from ..digest import CHANNEL_SOURCE_CUSTOM
 from ..llm import OpenRouter
-from .common import Button, back, kb, on_off, show, yes_no
+from .common import Button, back, cut, kb, on_off, page_slice, pager, show, yes_no
 
 router = Router(name="channel")
 
@@ -61,6 +62,9 @@ def validate_dest(raw: str) -> str:
 
 def _source_label() -> str:
     gid = int(db.get("channel_group_id") or 0)
+    if gid == CHANNEL_SOURCE_CUSTOM:
+        n = len(db.pub_source_channels(enabled_only=True))
+        return f"набор канала ({n} акт.)"
     if gid:
         row = db.group(gid)
         if row is None:
@@ -248,14 +252,24 @@ async def number_set(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "pub|src")
 async def source_menu(call: CallbackQuery) -> None:
     current = int(db.get("channel_group_id") or 0)
+    custom_n = len(db.pub_source_ids())
     rows: list[list[Button]] = [
         [
             Button(
                 text=f"{'🔘' if current == 0 else '⚪️'} Все каналы",
                 callback_data="pub|src|0",
             )
-        ]
+        ],
+        [
+            Button(
+                text=f"{'🔘' if current == CHANNEL_SOURCE_CUSTOM else '⚪️'} "
+                f"📣 Набор канала ({custom_n})",
+                callback_data="pub|src|custom",
+            )
+        ],
     ]
+    if current == CHANNEL_SOURCE_CUSTOM:
+        rows.append([Button(text="📝 Настроить набор", callback_data="pub|set|0")])
     for group in db.groups():
         n = len(db.group_channels(int(group["id"])))
         mark = "🔘" if current == int(group["id"]) else "⚪️"
@@ -271,6 +285,11 @@ async def source_set(call: CallbackQuery) -> None:
     raw = call.data.rsplit("|", 1)[1]
     if raw == "0":
         db.put("channel_group_id", 0)
+    elif raw == "custom":
+        db.put("channel_group_id", CHANNEL_SOURCE_CUSTOM)
+        if not db.pub_source_ids():
+            # Start from today's enabled set so the owner only unticks extras.
+            db.fill_pub_source([int(r["id"]) for r in db.channels(enabled_only=True)])
     else:
         row = db.group(int(raw)) if raw.isdigit() else None
         if row is None:
@@ -278,6 +297,51 @@ async def source_set(call: CallbackQuery) -> None:
             return
         db.put("channel_group_id", int(row["id"]))
     await show(call, _status_text(), _status_kb())
+
+
+def _custom_screen(page: int) -> tuple[str, object]:
+    channels = db.channels()
+    attached = db.pub_source_ids()
+    rows, page, total_pages = page_slice(channels, page)
+    buttons = [
+        [
+            Button(
+                text=f"{'☑️' if int(row['id']) in attached else '▫️'} @{cut(row['username'], 22)}"
+                + (f" · {cut(row['title'], 16)}" if row["title"] else ""),
+                callback_data=f"pub|sett|{row['id']}|{page}",
+            )
+        ]
+        for row in rows
+    ]
+    text = (
+        "📣 <b>Набор канала</b>\n\n"
+        f"Отмечено: {len(attached)} из {len(channels)}. Нажатие переключает. "
+        "Групповые дайджесты этот набор не затрагивает."
+    )
+    if not channels:
+        text += "\n\n<i>Сначала добавьте каналы в разделе «Каналы».</i>"
+    return text, kb(
+        *buttons,
+        pager("pub|set|", page, total_pages),
+        [back("pub|src")],
+    )
+
+
+@router.callback_query(F.data.startswith("pub|set|"))
+async def custom_screen(call: CallbackQuery) -> None:
+    raw = call.data.rsplit("|", 1)[1]
+    await show(call, *_custom_screen(int(raw) if raw.isdigit() else 0))
+
+
+@router.callback_query(F.data.startswith("pub|sett|"))
+async def custom_toggle(call: CallbackQuery) -> None:
+    try:
+        _, _, channel_id, page = call.data.split("|")
+        db.toggle_pub_source(int(channel_id))
+    except (ValueError, IndexError):
+        await call.answer()
+        return
+    await show(call, *_custom_screen(int(page) if page.isdigit() else 0))
 
 
 def _result_lines(result) -> str:

@@ -216,6 +216,27 @@ async def test_source_picker(harness):
     assert db.get("channel_group_id") == 0
 
 
+async def test_custom_set_select_autofills_and_toggles(harness):
+    from app.ui import channel as channel_ui
+
+    bot, dp, session = harness
+    c1 = db.add_channel("aaa")
+    c2 = db.add_channel("bbb")
+
+    await dp.feed_update(bot, callback(OWNER, "pub|src|custom"))
+    assert db.get("channel_group_id") == channel_ui.CHANNEL_SOURCE_CUSTOM
+    assert db.pub_source_ids() == {c1, c2}  # starts as today's enabled set
+
+    await dp.feed_update(bot, callback(OWNER, "pub|set|0", update_id=3))
+    assert any("Набор канала" in text for text in session.texts())
+
+    await dp.feed_update(bot, callback(OWNER, f"pub|sett|{c1}|0", update_id=4))
+    assert db.pub_source_ids() == {c2}
+
+    await dp.feed_update(bot, callback(OWNER, "pub", update_id=5))
+    assert any("набор канала (1 акт.)" in text for text in session.texts())
+
+
 async def test_preview_sends_to_owner_without_stamping_day(harness, monkeypatch):
     bot, dp, session = harness
     db.put("short_verbatim", 0)
